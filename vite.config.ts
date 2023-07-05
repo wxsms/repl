@@ -21,7 +21,6 @@ export default defineConfig({
     include: [
       'path-browserify',
       'onigasm',
-      'typescript',
       '@vue/language-service',
       'monaco-editor-core/esm/vs/editor/editor.worker',
       '@volar/monaco/worker',
@@ -45,7 +44,7 @@ export default defineConfig({
       output: {
         chunkFileNames: 'chunks/[name]-[hash].js',
       },
-      external: ['vue', 'vue/compiler-sfc'],
+      external: ['vue', 'vue/compiler-sfc', 'typescript'],
     },
   },
 })
