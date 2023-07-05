@@ -7,8 +7,8 @@ import onigasmWasm from 'onigasm/lib/onigasm.wasm?url'
 import { editor, languages, Uri } from 'monaco-editor-core'
 import * as volar from '@volar/monaco'
 import { Store } from '../store'
-import { createJsDelivrDtsHost } from 'volar-service-typescript'
 import { getOrCreateModel } from './utils'
+import type { CreateData } from './vue.worker'
 
 let initted = false
 export function initMonaco(store: Store) {
@@ -43,6 +43,11 @@ export function initMonaco(store: Store) {
   // Support for go to definition
   monaco.editor.registerEditorOpener({
     openCodeEditor(_, resource) {
+      if (resource.scheme === 'https') {
+        // ignore cdn files
+        return true
+      }
+
       const path = resource.path
       if (/^\//.test(path) && !/^\/node_modules/.test(path)) {
         const fileName = path.replace('/', '')
@@ -63,34 +68,48 @@ export function loadWasm() {
   return onigasm.loadWASM(onigasmWasm)
 }
 
+export class WorkerHost {
+  onFetchCdnFile(uri: string, text: string) {
+    getOrCreateModel(Uri.parse(uri), undefined, text)
+  }
+}
+
 let disposeVue: undefined | (() => void)
-export async function reloadVue(store: Store) {
+export async function reloadLanguageTools(store: Store) {
   disposeVue?.()
+
+  let dependencies = {}
+
+  if (store.vueVersion) {
+    dependencies = {
+      ...dependencies,
+      vue: store.vueVersion,
+      '@vue/compiler-core': store.vueVersion,
+      '@vue/compiler-dom': store.vueVersion,
+      '@vue/compiler-sfc': store.vueVersion,
+      '@vue/compiler-ssr': store.vueVersion,
+      '@vue/reactivity': store.vueVersion,
+      '@vue/runtime-core': store.vueVersion,
+      '@vue/runtime-dom': store.vueVersion,
+      '@vue/shared': store.vueVersion,
+    }
+  }
+
+  if (store.state.typescriptVersion) {
+    dependencies = {
+      ...dependencies,
+      typescript: store.state.typescriptVersion,
+    }
+  }
 
   const worker = editor.createWebWorker<any>({
     moduleId: 'vs/language/vue/vueWorker',
     label: 'vue',
-    host: createJsDelivrDtsHost(
-      !store.vueVersion
-        ? {}
-        : {
-            vue: store.vueVersion,
-            '@vue/compiler-core': store.vueVersion,
-            '@vue/compiler-dom': store.vueVersion,
-            '@vue/compiler-sfc': store.vueVersion,
-            '@vue/compiler-ssr': store.vueVersion,
-            '@vue/reactivity': store.vueVersion,
-            '@vue/runtime-core': store.vueVersion,
-            '@vue/runtime-dom': store.vueVersion,
-            '@vue/shared': store.vueVersion,
-          },
-      (filename, text) => {
-        getOrCreateModel(Uri.file(filename), undefined, text)
-      }
-    ),
+    host: new WorkerHost(),
     createData: {
       tsconfig: store.getTsConfig?.() || {},
-    },
+      dependencies,
+    } satisfies CreateData,
   })
   const languageId = ['vue', 'javascript', 'typescript']
   const getSyncUris = () =>
@@ -124,11 +143,31 @@ export async function reloadVue(store: Store) {
   }
 }
 
+export interface WorkerMessage {
+  event: 'init'
+  tsVersion: string
+  tsLocale?: string
+}
+
 export function loadMonacoEnv(store: Store) {
   ;(self as any).MonacoEnvironment = {
     async getWorker(_: any, label: string) {
       if (label === 'vue') {
-        return new vueWorker()
+        const worker = new vueWorker()
+        const init = new Promise<void>((resolve) => {
+          worker.addEventListener('message', (data) => {
+            if (data.data === 'inited') {
+              resolve()
+            }
+          })
+          worker.postMessage({
+            event: 'init',
+            tsVersion: store.state.typescriptVersion,
+            tsLocale: store.state.typescriptLocale,
+          } satisfies WorkerMessage)
+        })
+        await init
+        return worker
       }
       return new editorWorker()
     },
@@ -136,5 +175,7 @@ export function loadMonacoEnv(store: Store) {
   languages.register({ id: 'vue', extensions: ['.vue'] })
   languages.register({ id: 'javascript', extensions: ['.js'] })
   languages.register({ id: 'typescript', extensions: ['.ts'] })
-  languages.onLanguage('vue', () => reloadVue(store))
+
+  store.reloadLanguageTools = () => reloadLanguageTools(store)
+  languages.onLanguage('vue', () => store.reloadLanguageTools!())
 }

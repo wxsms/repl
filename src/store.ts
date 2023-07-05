@@ -9,7 +9,6 @@ import {
 } from 'vue/compiler-sfc'
 import { OutputModes } from './output/types'
 import { Selection } from 'monaco-editor-core'
-import { reloadVue } from './monaco/env'
 
 const defaultMainFile = 'src/App.vue'
 
@@ -85,6 +84,8 @@ export interface StoreState {
   errors: (string | Error)[]
   vueRuntimeURL: string
   vueServerRendererURL: string
+  typescriptVersion: string
+  typescriptLocale: string | undefined
   // used to force reset the sandbox
   resetFlip: boolean
 }
@@ -107,6 +108,7 @@ export interface Store {
   renameFile: (oldFilename: string, newFilename: string) => void
   getImportMap: () => any
   getTsConfig?: () => any
+  reloadLanguageTools: undefined | (() => void)
   initialShowOutput: boolean
   initialOutputMode: OutputModes
 }
@@ -127,6 +129,7 @@ export class ReplStore implements Store {
   options?: SFCOptions
   initialShowOutput: boolean
   initialOutputMode: OutputModes
+  reloadLanguageTools: undefined | (() => void)
 
   private defaultVueRuntimeURL: string
   private defaultVueServerRendererURL: string
@@ -166,6 +169,8 @@ export class ReplStore implements Store {
       errors: [],
       vueRuntimeURL: this.defaultVueRuntimeURL,
       vueServerRendererURL: this.defaultVueServerRendererURL,
+      typescriptVersion: 'latest',
+      typescriptLocale: undefined,
       resetFlip: true,
     })
 
@@ -182,8 +187,12 @@ export class ReplStore implements Store {
     )
 
     watch(
-      () => this.state.files[tsconfigFile]?.code,
-      () => reloadVue(this)
+      () => [
+        this.state.files[tsconfigFile]?.code,
+        this.state.typescriptVersion,
+        this.state.typescriptLocale,
+      ],
+      () => this.reloadLanguageTools?.()
     )
 
     this.state.errors = []
@@ -382,6 +391,11 @@ export class ReplStore implements Store {
     scopes?: Record<string, Record<string, string>>
   }) {
     this.state.files[importMapFile]!.code = JSON.stringify(map, null, 2)
+  }
+
+  setTypeScriptVersion(version: string) {
+    this.state.typescriptVersion = version
+    console.info(`[@vue/repl] Now using TypeScript version: ${version}`)
   }
 
   async setVueVersion(version: string) {
